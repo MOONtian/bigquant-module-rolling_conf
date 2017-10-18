@@ -34,21 +34,23 @@ def bigquant_run(
     rolling_update_days: I.int('更新周期，按自然日计算，每多少天更新一次', 1)=365,
     rolling_update_days_for_live: I.int('模拟实盘更新周期，按自然日计算，每多少天更新一次。如果需要在模拟实盘阶段使用不同的模型更新周期，可以设置这个参数', 1)=None,
     rolling_min_days: I.int('最小数据天数，按自然日计算，所以第一个滚动的结束日期是 从开始日期到开始日期+最小数据天数', 0)=365*2,
-    rolling_max_days: I.int('最大数据天数，按自然日计算，0，表示没有限制，否则每一个滚动的开始日期=max(此滚动的结束日期-最大数据天数, 开始日期)', 0)=0) -> [
+    rolling_max_days: I.int('最大数据天数，按自然日计算，0，表示没有限制，否则每一个滚动的开始日期=max(此滚动的结束日期-最大数据天数, 开始日期)', 0)=0,
+    rolling_count_for_live: I.int('实盘滚动次数，模拟实盘模式下，取最后多少次滚动。一般在模拟实盘模式下，只用到最后一次滚动训练的模型，这里可以设置为1；如果你的滚动训练数据时间段很短，以至于期间可能没有训练数据，这里可以设置大一点。0表示没有限制', 0)=1) -> [
         I.port('滚动配置数据(DataSource pickle)', 'data'),
     ]:
     '''
     滚动运行配置。返回滚动列表，每个滚动包含开始日期和结束日期。
     '''
+    # 是否实盘模式
+    is_live_run = T.live_run_param('trading_date', None) is not None
     start_date = pd.to_datetime(start_date)
     end_date = pd.to_datetime(end_date)
     # -1 for start and end included
     rolling_min_days =  datetime.timedelta(days=rolling_min_days-1)
     rolling_max_days = datetime.timedelta(days=rolling_max_days-1) if rolling_max_days else None
-    if rolling_update_days_for_live:
-        if T.live_run_param('trading_date', None) is not None:
-            # 如果是实盘模式
-            rolling_update_days = rolling_update_days_for_live
+
+    if is_live_run and rolling_update_days_for_live:
+        rolling_update_days = rolling_update_days_for_live
     rolling_update_days = datetime.timedelta(days=rolling_update_days)
 
     rollings = []
@@ -64,11 +66,14 @@ def bigquant_run(
         })
         rolling_end_date += rolling_update_days
 
-    if not rolling_end_date:
+    if not rollings:
         raise Exception('没有滚动需要执行，请检查配置')
 
     log.info('生成了 %s 次滚动，第一次 %s，最后一次 %s' % (
         len(rollings), rollings[0], rollings[-1]))
+    if is_live_run and rolling_count_for_live:
+        rollings = rollings[-rolling_count_for_live:]
+        log.info('实盘模式，取最后 %s 个滚动： %s' % (rolling_count_for_live, rollings))
 
     # write to datasource, cached (important)
     rollings_ds = DataSource.write_pickle(rollings, use_cache=True)
